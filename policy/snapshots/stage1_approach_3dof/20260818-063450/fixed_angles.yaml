@@ -1,0 +1,14 @@
+# Written by set_angles.py. Only the joints NOT in env.trained_joints are
+# read, so with the 4-DOF split only wrist_roll and gripper matter — the
+# elbow_flex entry is kept for reference and ignored.
+#
+# These are the values your last verified run used.
+fixed_joints:
+  elbow_flex: 0.473      # IGNORED while elbow_flex is a trained joint
+  wrist_roll: -1.5708    # -90 deg
+  gripper: 0.5           # 46.4 mm pad gap on a 30 mm cube
+trained_joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex]
+_note: >
+  Hold these with their position actuators at a constant ctrl. Do not weld
+  them with <equality>: the real STS3215 servos have finite holding stiffness
+  and sag under load, and a weld gives a rigidity that exists only in sim.

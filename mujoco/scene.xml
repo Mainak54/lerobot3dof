@@ -1,0 +1,32 @@
+<mujoco model="scene">
+    <include file="so101_calib.xml" />
+
+    <option timestep="0.002" integrator="implicitfast" cone="elliptic" />
+    <statistic center="0.2 0 0.1" extent="0.6" />
+
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+        <!-- haze black so the horizon does not fade to blue -->
+        <rgba haze="0 0 0 1" />
+        <global azimuth="160" elevation="-20" />
+    </visual>
+
+    <asset>
+        <!-- solid black skybox -->
+        <texture type="skybox" builtin="flat" rgb1="0 0 0" rgb2="0 0 0"
+            width="512" height="3072" />
+        <!-- solid black ground: flat builtin, no checker, no edge mark -->
+        <texture type="2d" name="groundplane" builtin="flat" rgb1="0 0 0" rgb2="0 0 0"
+            width="300" height="300" />
+        <material name="groundplane" texture="groundplane" texuniform="true"
+            texrepeat="5 5" reflectance="0" />
+    </asset>
+
+    <worldbody>
+        <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
+        <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane" />
+
+        <camera name="front" pos="0.7 0 0.35" xyaxes="0 -1 0  0.4 0 1" />
+        <camera name="top" pos="0.25 0 0.7" xyaxes="0 -1 0  1 0 0" />
+    </worldbody>
+</mujoco>

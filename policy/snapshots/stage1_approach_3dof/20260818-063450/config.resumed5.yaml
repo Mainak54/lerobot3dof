@@ -1,0 +1,264 @@
+# =====================================================================
+# SO-101 stage 1, 3-DOF variant: locate the cube and hold a pre-grasp pose
+#
+#   TRAINED : shoulder_pan, shoulder_lift, elbow_flex, wrist_flex
+#   FIXED   : wrist_roll, gripper
+#
+# Freeing elbow_flex gives three parallel pitch axes, so the planar arm is
+# redundant: position AND a vertical approach can be satisfied together, and
+# align_min becomes a criterion the policy can actually meet. Measured with
+# the scripted IK: tilt fell from 8.2 deg median to 0.0, and approach_angle
+# vanished from the failure breakdown.
+#
+# This is configs/stage1.yaml with ONLY the changes the 3-servo switch forces.
+# Every value that still has a meaning is carried over unchanged. Each removed
+# or altered key is marked CHANGED: with the reason.
+#
+# A resolved copy of this file is written into every snapshot directory,
+# so any checkpoint can be traced back to the settings that produced it.
+# =====================================================================
+
+run_name: stage1_approach_3dof
+
+env:
+  scene: mujoco/train_scene.xml
+  camera: wrist_cam
+
+  # Written by set_angles.py. Only the joints NOT in trained_joints are read;
+  # a leftover elbow_flex entry is ignored, so the file survives the switch.
+  fixed_angles: configs/fixed_angles.yaml
+
+  # ------------------------------------------------------------------
+  # THE ONLY RATE KNOB. Everything else in this file is authored at
+  # reference_hz and rescaled from it by rate.py: frame_skip, max_delta,
+  # action_filter, action_delay, hold_steps, w_hold, step_cost, gamma,
+  # total_timesteps and checkpoint_every.
+  #
+  #   control_hz: 30   -> frame_skip 20   (matches LeRobot's follower rate)
+  #   control_hz: 5    -> frame_skip 120
+  #   control_hz: 60   -> frame_skip 10
+  #
+  # Must divide physics_hz evenly. The env prints the full resolved table on
+  # construction, so you can see exactly what changed.
+  # ------------------------------------------------------------------
+  control_hz: 30
+  physics_hz: 600           # must match the timestep in train_scene.xml
+  reference_hz: 30          # the rate every number below was tuned at
+
+  episode_seconds: 30.0
+
+  # episode_mode:
+  #   terminate_on_success  ends the moment the pre-grasp pose is held
+  #   dwell                 runs the FULL horizon. Holding the pose pays
+  #                         w_hold every step, so return is maximised by
+  #                         arriving early and staying there. Arm returns to
+  #                         home and the cube moves ONLY at reset.
+  episode_mode: dwell
+
+  # Which joints the policy controls; everything else is held at the value in
+  # fixed_angles.yaml. home_qpos and max_delta must have one entry per trained
+  # joint, in this same order (the env errors out if they do not).
+  #
+  #   3 joints, elbow frozen   [shoulder_pan, shoulder_lift, wrist_flex]
+  #     approach pitch is DETERMINED by geometry, not controllable
+  #   4 joints, elbow freed    [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex]
+  #     three parallel pitch axes make the planar arm redundant, so pitch
+  #     becomes controllable again and align_min is a meaningful criterion
+  trained_joints: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex]
+
+  # 4 entries: pan, lift, elbow, wrist_flex. Taken straight from the original
+  # 6-DOF home [0.0, -0.9, 1.1, 0.5, 0.0, 0.5]; the two dropped entries
+  # (wrist_roll, gripper) live in fixed_angles.yaml.
+  home_qpos: [0.0, -0.9, 1.1, 0.5]
+  home_noise: 0.08
+
+  # Max change in each joint's position target per control step (rad).
+  # At 30 Hz, 0.05 rad/step = 1.5 rad/s = 86 deg/s commanded. Halve these for
+  # visibly gentler motion; the policy just needs more steps to cover the same
+  # distance, so raise episode_seconds if you do.
+  # 4 entries, one per trained joint, same values as the 6-DOF original.
+  max_delta: [0.05, 0.05, 0.05, 0.05]
+
+  # First-order low-pass on the action before it integrates into the position
+  # target: a_filt = alpha*a_prev + (1-alpha)*a_new.
+  #   0.0  no filtering
+  #   0.6  measured: peak joint speed 247 -> 150 deg/s, mean 103 -> 39 deg/s
+  # This CHANGES THE DYNAMICS, so set it before training. A policy trained at
+  # 0.0 and run at 0.6 will undershoot everything.
+  action_filter: 0.5
+
+  # Adds [last_seen_u, last_seen_v, staleness] to the observation (14 -> 17).
+  # Without it, an out-of-frame cube produces an observation identical whether
+  # it exited left or right, so a feed-forward policy cannot search
+  # directionally — it can only sweep, and be wrong half the time. Turn this
+  # off only to reproduce the 6-DOF observation exactly.
+  # CHANGING THIS CHANGES THE OBSERVATION SHAPE: retrain, do not resume.
+  last_seen_memory: true
+
+  # Lowest allowed height for the fingertips, in metres. Below this the
+  # w_ground penalty starts, scaled by how far below.
+  ground_clearance: 0.010
+
+spawn:
+  cube_half: 0.015          # 30 mm cube
+  # KEEP-OUT CIRCLE. No cube is ever placed within radius_min of the
+  # shoulder_pan axis (not the world origin — the env prints the resolved
+  # centre at startup). Raise this to push cubes further out; lower it only if
+  # tools/fit_spawn.py says the arm can actually pre-grasp that close.
+  radius_min: 0.18         # VERIFIED at 4 DOF: scripted 100%, 0/10 unreachable
+  radius_max: 0.20         # narrow. Widen with tools/fit_spawn.py, then re-run sanity_check
+  angle_min_deg: -60.0
+  angle_max_deg: 60.0
+  min_clearance: 0.12       # keep the cube away from the drop cylinder
+  max_reach: 0.42           # pinch beyond this from the base = out of bounds
+
+  # Fraction of episodes that start with the cube OUTSIDE the camera view.
+  # If the cube is always visible at reset, "search" collapses into pure
+  # servoing and the agent never learns to look for anything.
+  hidden_fraction: 0.4
+
+detector:
+  # CHANGED: backend key removed. analytic and yolo are gone - you asked for
+  # OpenCV detection, and keeping three code paths that must agree on `size`
+  # to 0.00e+00 is machinery for a choice already made.
+  #
+  # opencv    offscreen render + HSV threshold + contours. ~150-400 steps/s.
+  #           Pixel-based with no neural net. Rejects the yellow arm and blue
+  #           cylinder on saturation alone. Measured on synthetic frames:
+  #           300/300 detected, 0.25 px median centre error, 0/200 false
+  #           positives. Near-perfect in sim, brittle on a real camera.
+  v_min: 140                # HSV value floor: "bright"
+  s_max: 90                 # HSV saturation ceiling: "unsaturated" = white
+  min_area_px: 25           # ignore blobs smaller than this
+  randomize_thresholds: true  # jitter v_min/s_max each episode so the policy
+                              # cannot depend on one tuned operating point
+
+  width: 640
+  height: 480
+
+randomization:
+  enabled: true
+  kp_frac: 0.25             # the baked-in kp=998 assumes an idealised STS3215
+  damping_frac: 0.30
+  friction_frac: 0.30
+  cube_mass_frac: 0.20
+  cube_friction_range: [0.7, 2.0]
+  cam_pos_mm: 4.0           # printed mount will not match CAD exactly
+  cam_rot_deg: 3.0
+  cam_fovy_deg: 3.0
+  action_delay_min: 0
+  action_delay_max: 2
+
+reward:
+  weights:
+    w_visible: 2.0
+    w_center: 1.5
+    w_xy: 6.0
+    w_z: 4.0
+    w_align: 6.0
+    # CHANGED: w_grip removed. The gripper is a fixed joint now, so a term
+    # rewarding its opening is a constant and contributes nothing.
+    # smoothness trio - see reward.py for why all three
+    w_smooth: 0.15      # action chatter
+    w_vel: 0.05        # joint speed
+    w_accel: 0.005      # joint jerk
+    w_limit: 0.5
+    # Collision with the base primitives or the floor. Flat per-step cost plus
+    # a depth term, so grazing costs less than driving through. Deliberately
+    # NOT part of the potential: a potential term would refund the cost when
+    # the arm backs out, making a dip into the base effectively free.
+    w_collision: 1.0
+    w_collision_depth: 40.0
+    # Gripper dipping below env.ground_clearance. Height-based, so it fires
+    # even when the scene's floor geom is named something the contact check
+    # above misses. Linear in depth, so there is a gradient pointing back up.
+    w_ground: 3.0
+    w_effort: 0.005
+    step_cost: 0.01
+    # per-step reward while the pose is held; this is the objective in dwell
+    # mode. Must clearly exceed step_cost (0.01) or holding is not worth the
+    # time. A full 30 s hold is worth ~450.
+    w_hold: 1.5
+    # Per-step reward for the cube being VISIBLE, outside the potential.
+    # gamma*Phi'-Phi costs (1-gamma)*Phi = up to 0.155/step just for HOLDING a
+    # high potential, so without this, keeping the cube in frame is net
+    # negative until the pose is actually reached. Measured: detect_rate hit
+    # 0.80 at 29k steps then decayed to 0.002. 0.25 > 0.155 makes looking a
+    # net gain.
+    w_seen_step: 0.18
+    # arrival bonus, paid ONCE per episode so it cannot be farmed by leaving
+    # and re-entering the pose
+    success_bonus: 20.0
+    failure_penalty: 2.0
+    # Gate every privileged-cube-pose shaping term on the cube being VISIBLE.
+    # Ungated, an off-camera cube gives opposite shaping gradients to
+    # identical observations, and that hidden-state noise is what teaches the
+    # policy to sit still instead of searching. Set false to reproduce the
+    # original ungated shaping.
+    gate_shaping_on_visibility: true
+
+    gamma: 0.99             # MUST equal train.gamma for policy invariance
+
+  success:
+    # MEASURED, not guessed. The wrist camera is aimed at the GRASP point, so
+    # at a 60 mm pre-grasp standoff the cube naturally sits at |u| ~ 0.26 in
+    # normalised image coords. A 0.25 tolerance is geometrically unsatisfiable
+    # and the scripted IK controller scored 3/30 against it. 0.40 gives 20/30.
+    center_tol: 0.40
+    # The jaws are 46.4 mm apart at q=0.5, so a 30 mm cube leaves only 8.2 mm
+    # of true clearance per side. 0.030 would let the cube sit outside the jaws
+    # entirely. 0.020 is what the scripted controller actually achieves at p90;
+    # stage 2 makes the final alignment during descent.
+    xy_tol: 0.03
+    z_min: 0.045
+    z_max: 0.075
+    align_min: 0.94         # ~20 deg from straight down
+    # CHANGED: grip_min / grip_max removed. The gripper is frozen at the value
+    # in fixed_angles.yaml, so the condition is either always true or always
+    # false and it cannot be a success criterion either way.
+    speed_max: 0.08
+    hold_steps: 8         # 0.5 s at 30 Hz
+
+train:
+  # 30 s episodes never end early, so every episode costs the full 900 steps.
+  total_timesteps: 20_000_000
+  n_envs: 48
+  seed: 0
+
+  n_steps: 192            # x n_envs 6 = 6144 = 6.8 episodes per update
+  batch_size: 1024         # 6 minibatches x 10 epochs = 60 grad steps
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.002          # was 0.004; std collapsed 1.00 -> 0.37 by 1.2M
+  vf_coef: 0.5
+  learning_rate: 1e-4
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+
+  # cpu is right for a 256x256 MLP: too small to fill a GPU, and with 8
+  # renderers MuJoCo is the bottleneck anyway. Set cuda only if you profile it.
+  device: cpu
+
+  normalize_obs: true
+  normalize_reward: true
+  clip_obs: 10.0
+
+  checkpoint_every: 200_000
+
+  # How often to run evaluation, in total timesteps, and how many episodes per
+  # evaluation. best.pt is chosen on this number, so too few episodes selects
+  # the luckiest checkpoint rather than the best one: with hidden_fraction 0.4
+  # a 5-episode eval has a standard error near 20 percentage points. 15 costs
+  # ~2,250 steps per eval, which is nothing against the total budget.
+  # NOT rate-scaled — these are absolute step counts, like checkpoint_every.
+  eval_every: 200_000
+  n_eval_episodes: 15
+  log_dir: train_logs
+  snapshot_dir: policy/snapshots
+  # Each run lands in <snapshot_dir>/<run_name>/<YYYYmmdd-HHMMSS>/ with a
+  # `latest` symlink alongside, so a second run cannot overwrite the first
+  # one's best.pt. Set false for a single flat directory per run_name.
+  run_timestamp: true
+  save_success_states: true

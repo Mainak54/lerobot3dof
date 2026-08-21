@@ -1,0 +1,35 @@
+# SO-101 stage 1 — training + evaluation dependencies
+#
+#   pip install -r requirements.txt
+#
+# Python 3.10 or 3.11. Verified against the versions the project was
+# developed on; upper bounds are deliberate where an API break is plausible.
+
+# --- physics and RL -------------------------------------------------------
+mujoco>=3.1,<4.0
+gymnasium>=0.29,<1.1
+stable-baselines3>=2.3,<3.0
+
+# torch comes in via stable-baselines3. CPU-only is the right build here: the
+# policy is a 256x256 MLP on a 20-dim input, far too small to benefit from a
+# GPU, and the GPU is busy with EGL rendering. To force the CPU wheel and save
+# ~2 GB of CUDA libraries:
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0
+
+# --- vision ---------------------------------------------------------------
+# headless: no Qt/GTK, correct for a rented training box. Swap to
+# opencv-python if you want visualize_policy.py's cv2.imshow window locally.
+opencv-python-headless>=4.8
+numpy>=1.24,<3.0
+pillow>=10.0          # visualize_policy.py --record / frame saving
+
+# --- config and logging ---------------------------------------------------
+pyyaml>=6.0
+tensorboard>=2.14
+tqdm>=4.65            # SB3 progress bar; optional, degrades gracefully
+rich>=13.0            # same
+
+# --- interactive viewer (set_angles.py, view_env.py) ----------------------
+# Not needed on a headless training box, but harmless there.
+glfw>=2.6

@@ -1,0 +1,78 @@
+<mujoco model="so101_stage1">
+    <include file="so101_calib.xml" />
+
+    <!-- timestep = 1/600 s. With frame_skip = 20 this gives exactly 30 Hz
+         control, matching LeRobot's follower rate. 0.002 does not divide
+         into 30 Hz (it would need 16.67 substeps). -->
+    <option timestep="0.0016666667" integrator="implicitfast" cone="elliptic" />
+    <statistic center="0.2 0 0.1" extent="0.7" />
+
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+        <rgba haze="0 0 0 1" />
+        <global azimuth="160" elevation="-20" />
+    </visual>
+
+    <asset>
+        <texture type="skybox" builtin="flat" rgb1="0 0 0" rgb2="0 0 0"
+            width="512" height="3072" />
+        <texture type="2d" name="groundplane" builtin="flat" rgb1="0 0 0" rgb2="0 0 0"
+            width="300" height="300" />
+        <material name="groundplane" texture="groundplane" texuniform="true"
+            texrepeat="5 5" reflectance="0" />
+        <material name="cube_mat" rgba="0.95 0.95 0.95 1" />
+        <material name="cylinder_mat" rgba="0.15 0.45 0.95 1" />
+    </asset>
+
+    <worldbody>
+        <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
+        <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
+            material="groundplane" group="3"
+            condim="4" friction="1.0 0.01 0.001" />
+
+        <camera name="front" pos="0.7 0 0.35" xyaxes="0 -1 0  0.4 0 1" />
+        <camera name="top" pos="0.25 0 0.7" xyaxes="0 -1 0  1 0 0" />
+
+        <!-- ============================ CUBE ============================
+             30 mm, free floating, resting on the plane at z = 0.015.
+             Two geoms on purpose:
+               group 2 = visual only, contype/conaffinity 0, invisible to rays
+               group 3 = collision AND the ray target used by the detector
+             The detector casts rays with only group 3 enabled, so the camera
+             marker geoms (group 2) never falsely occlude the cube.
+             Position is overwritten every reset by the env. -->
+        <body name="cube" pos="0.22 0.0 0.015">
+            <freejoint name="cube_free" />
+            <inertial pos="0 0 0" mass="0.025"
+                diaginertia="3.75e-6 3.75e-6 3.75e-6" />
+            <geom name="cube_visual" type="box" size="0.015 0.015 0.015"
+                material="cube_mat" group="2" contype="0" conaffinity="0" />
+            <geom name="cube_collision" type="box" size="0.015 0.015 0.015"
+                group="3" rgba="0.95 0.95 0.95 1"
+                condim="4" friction="1.2 0.01 0.001"
+                solref="0.005 1" solimp="0.95 0.99 0.001" />
+        </body>
+
+        <!-- ========================== CYLINDER ==========================
+             The drop destination. Static (no freejoint), fixed position.
+             Deliberately large and blue: at transport time the held cube
+             covers roughly 35% of the wrist camera's image height, so a
+             small white target would be effectively invisible.
+             Not used by stage 1 rewards, present so the observation and
+             scene stay identical across stages. -->
+        <body name="target_cylinder" pos="0.10 -0.26 0.04">
+            <geom name="cylinder_visual" type="cylinder" size="0.030 0.040"
+                material="cylinder_mat" group="2" contype="0" conaffinity="0" />
+            <geom name="cylinder_collision" type="cylinder" size="0.030 0.040"
+                group="3" rgba="0.15 0.45 0.95 1" condim="3" />
+        </body>
+    </worldbody>
+
+    <keyframe>
+        <!-- home: arm folded up and clear of the floor, gripper part-open.
+             qpos = 6 arm joints + 7 cube freejoint (xyz + wxyz quat) -->
+        <key name="home"
+            qpos="0 -0.9 1.1 0.5 0 0.5   0.22 0.0 0.015  1 0 0 0"
+            ctrl="0 -0.9 1.1 0.5 0 0.5" />
+    </keyframe>
+</mujoco>

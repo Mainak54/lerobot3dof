@@ -1,0 +1,18 @@
+fixed_joints:
+  elbow_flex: 0.4732
+  wrist_roll: -1.57099
+  gripper: 0.22864
+trained_joints:
+- shoulder_pan
+- shoulder_lift
+- wrist_flex
+- elbow_flex
+pregrasp:
+  pad_z_min: 0.06
+  pad_z_max: 0.09
+  approach_tol_deg: 25.0
+spawn_hint:
+  radius_min: 0.15
+  radius_max: 0.3
+_note: Hold the fixed joints with their position actuators at a constant ctrl. Do
+  not weld them with <equality> -- the real STS3215 servos have finite holding stiffness.
